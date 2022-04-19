@@ -18,13 +18,16 @@ bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
 tqdm.pandas(bar_format=bar_format)
 
 
-def prepare_data(data, n_components, test_size, seed=12, scaler=None):
+def prepare_data(data, n_components, test_size, seed=12, pca=None, scaler=None):
     # parse data and labels
     X = np.stack(data['elf'].sum())
     
-    # transform
-    pca = PCA(n_components=n_components, svd_solver='full', random_state=seed)
-    X = pca.fit_transform(X)
+    # pca transform
+    if pca:
+        X = pca.transform(X)
+    else:
+        pca = PCA(n_components=n_components, svd_solver='full', random_state=seed)
+        X = pca.fit_transform(X)
     
     # standardize data
     if scaler:
@@ -45,10 +48,10 @@ def prepare_data(data, n_components, test_size, seed=12, scaler=None):
         X_data = X
         y_data = None
     
-    return X_data, y_data, scaler
+    return X_data, y_data, pca, scaler
 
 
-def train_models(X_data, y_data, scaler, n_models=100, seed=12, save_path=None):
+def train_models(X_data, y_data, pca, scaler, n_models=100, seed=12, save_path=None):
     # compute sample weights
     X_train, X_test = X_data
     y_train, y_test = y_data
@@ -75,7 +78,7 @@ def train_models(X_data, y_data, scaler, n_models=100, seed=12, save_path=None):
                                                    sample_weight=w_train[idx_dev])
         acc_wt['test'][i] = balanced_accuracy_score(y_test, clfs[i].predict(X_test), sample_weight=w_test)
     
-    CLFs = {'clfs': clfs, 'acc': acc, 'acc_wt': acc_wt, 'scaler': scaler}
+    CLFs = {'clfs': clfs, 'acc': acc, 'acc_wt': acc_wt, 'pca': pca, 'scaler': scaler}
     
     if save_path:
         dump(CLFs, save_path + '.joblib')
@@ -110,7 +113,7 @@ def predict(data, CLFs, seed=12, save_path=None):
     n_models = len(CLFs['clfs'])
     
     # predict on data
-    X_eval = prepare_data(data, n_components, 0, seed=seed, scaler=CLFs['scaler'])[0]
+    X_eval = prepare_data(data, n_components, 0, seed=seed, pca=CLFs['pca'], scaler=CLFs['scaler'])[0]
     y_pred_mean = np.stack([CLFs['clfs'][i].predict_proba(X_eval) for i in range(n_models)]).mean(axis=0)
     y_pred_std = np.stack([CLFs['clfs'][i].predict_proba(X_eval) for i in range(n_models)]).std(axis=0)
     y_class = y_pred_mean.argmax(axis=1)
