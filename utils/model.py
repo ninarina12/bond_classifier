@@ -93,7 +93,7 @@ def plot_scores(y_pred_mean, y_pred_std, y_true, save_path=None):
         y_pred_std_j = y_pred_std[y_true==j]
         for i in range(4):
             ax[j].scatter(y_pred_std_j[:,i], y_pred_mean_j[:,i], s=40, ec='black', fc=palette[i])
-        ax[j].set_title(list(bonds.keys())[j].capitalize(), color='black', fontsize=fontsize)
+        ax[j].set_title(list(bonds.keys())[j].capitalize(), color=palette[j], fontsize=fontsize)
         ax[j].set_aspect('equal')
 
     ax[0].set_ylabel('Mean predicted score')
