@@ -38,7 +38,7 @@ def read_elf(x, dirname):
     return data
 
 
-def load_data(dirname, structure=True, labeled=True):
+def load_data(dirname, structure=True, labeled=False, sort=False):
     # load data from directory
     materials = next(os.walk(dirname))[1]
     data = pd.DataFrame({'formula': materials})
@@ -50,6 +50,10 @@ def load_data(dirname, structure=True, labeled=True):
         data['label'] = data['formula'].apply(lambda x: read_label(x, dirname))
     data['data'] = data['formula'].apply(lambda x: read_elf(x, dirname))
     data = pd.concat([data.drop(['data'], axis=1), data['data'].apply(pd.Series)], axis=1)
+    
+    if sort:
+        # sort ELF profiles so larger peaks come first
+        data = sort_elf(data)
     return data
 
 
@@ -60,6 +64,33 @@ def bond_to_float(x):
 def second_moment(x, l):
     r = np.linspace(-l/2., l/2., len(x))
     return (x*r**2).sum()
+
+
+def calculate_moments(data):
+    data['I'] = data[['elf', 'bond_length']].apply(
+        lambda x: [second_moment(k,l) for (k,l) in zip(x.elf, x.bond_length)], axis=1)
+    data['A'] = data[['elf', 'bond_length']].apply(
+        lambda x: [np.trapz(k, np.linspace(0.,l,len(k))) for (k,l) in zip(x.elf, x.bond_length)], axis=1)
+    return data
+
+
+def sort_elf(data):
+    # compute pdf and cdf
+    data['elf_pdf'] = data[['elf', 'bond_length']].apply(
+        lambda x: [np.array(k)/(np.sum(k)*l/len(k)) for (k,l) in zip(x.elf, x.bond_length)], axis=1)
+
+    data['elf_cdf'] = data[['elf_pdf', 'bond_length']].apply(
+        lambda x: [l/len(k)*np.cumsum(k) for (k,l) in zip(x.elf_pdf, x.bond_length)], axis=1)
+
+    data['elf_cdf_r'] = data[['elf_pdf', 'bond_length']].apply(
+        lambda x: [l/len(k)*np.cumsum(k[::-1]) for (k,l) in zip(x.elf_pdf, x.bond_length)], axis=1)
+
+    data['v'] = data[['elf_cdf', 'elf_cdf_r']].apply(
+        lambda x: [2*(c1.sum() >= c2.sum()) - 1 for (c1,c2) in zip(x.elf_cdf, x.elf_cdf_r)], axis=1)
+    
+    data['elf_orig'] = data['elf'].copy()
+    data['elf'] = data[['elf_orig', 'v']].apply(lambda x: [k[::l] for (k,l) in zip(x.elf_orig, x.v)], axis=1)
+    return data
 
 
 def plot_cevr(evr, save_path=None):
@@ -74,16 +105,8 @@ def plot_cevr(evr, save_path=None):
     print('EVR of 0.99 at', nc, 'components')
     if save_path:
         fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
-
-
-def calculate_moments(data):
-    data['I'] = data[['elf', 'bond_length']].apply(
-        lambda x: [second_moment(k,l) for (k,l) in zip(x.elf, x.bond_length)], axis=1)
-    data['A'] = data[['elf', 'bond_length']].apply(
-        lambda x: [np.trapz(k, np.linspace(0.,l,len(k))) for (k,l) in zip(x.elf, x.bond_length)], axis=1)
-    return data
-
-    
+        
+        
 def plot_pca(z, data, bonds, axes=[0,1,2], save_path=None):
     # plot projections of three PCs colored by descriptors
     e1, e2, e3 = axes

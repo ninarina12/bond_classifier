@@ -107,13 +107,13 @@ def plot_scores(y_pred_mean, y_pred_std, y_true, save_path=None):
         fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
         
           
-def predict(data, CLFs, seed=12, save_path=None):
+def predict(data, CLFs, save_path=None):
     # get model properties
     n_components = CLFs['scaler'].n_features_in_
     n_models = len(CLFs['clfs'])
     
     # predict on data
-    X_eval = prepare_data(data, n_components, 0, seed=seed, pca=CLFs['pca'], scaler=CLFs['scaler'])[0]
+    X_eval = prepare_data(data, n_components, 0, pca=CLFs['pca'], scaler=CLFs['scaler'])[0]
     y_pred_mean = np.stack([CLFs['clfs'][i].predict_proba(X_eval) for i in range(n_models)]).mean(axis=0)
     y_pred_std = np.stack([CLFs['clfs'][i].predict_proba(X_eval) for i in range(n_models)]).std(axis=0)
     y_class = y_pred_mean.argmax(axis=1)
