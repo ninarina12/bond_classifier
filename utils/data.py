@@ -93,16 +93,16 @@ def sort_elf(data):
     return data
 
 
-def plot_cevr(evr, save_path=None):
+def plot_cevr(evr, th=0.99, save_path=None):
     # plot cumulative explained variance as a funciton of the number of PCs
     fig, ax = plt.subplots(figsize=(4,3.5))
     evr = np.cumsum(evr)
-    nc = np.argmin(np.abs(evr - 0.99)) + 1
+    nc = np.argmin(np.abs(evr - th)) + 1
     ax.plot(range(1,len(evr)+1), evr, color='black');
     ax.axvline(nc, ls='dashed', color='dimgray')
     ax.set_xlabel('Number of PCs')
     ax.set_ylabel('Explained variance')
-    print('EVR of 0.99 at', nc, 'components')
+    print('EVR of', th, 'at', nc, 'components')
     if save_path:
         fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
         

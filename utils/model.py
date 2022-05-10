@@ -7,20 +7,24 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 
 from joblib import dump, load
 from tqdm import tqdm
 from utils.data import bonds, bond_to_float
-from utils.plot import palette, fontsize, textsize
+from utils.plot import palette, fontsize, textsize, cmap_mono
 
 bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
 tqdm.pandas(bar_format=bar_format)
 
 
-def prepare_data(data, n_components, test_size, seed=12, pca=None, scaler=None):
+def prepare_data(data, n_components, test_size, seed=12, pca=None, scaler=None, columns=[]):
     # parse data and labels
     X = np.stack(data['elf'].sum())
+    
+    # additional columns
+    for col in columns:
+        X = np.hstack([X, np.expand_dims(data[col].sum(), axis=1)])
     
     # pca transform
     if pca:
@@ -94,26 +98,24 @@ def plot_scores(y_pred_mean, y_pred_std, y_true, save_path=None):
         for i in range(4):
             ax[j].scatter(y_pred_std_j[:,i], y_pred_mean_j[:,i], s=40, ec='black', fc=palette[i])
         ax[j].set_title(list(bonds.keys())[j].capitalize(), color=palette[j], fontsize=fontsize)
-        ax[j].set_aspect('equal')
 
     ax[0].set_ylabel('Mean predicted score')
     ax[1].set_xlabel('Std. predicted score', x=1)
 
     fig.suptitle('True class', fontsize=fontsize)
     fig.tight_layout()
-    fig.subplots_adjust(wspace=0.1)
     
     if save_path:
         fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
         
-          
-def predict(data, CLFs, save_path=None):
+        
+def predict(data, CLFs, columns=[], save_path=None):
     # get model properties
     n_components = CLFs['scaler'].n_features_in_
     n_models = len(CLFs['clfs'])
     
     # predict on data
-    X_eval = prepare_data(data, n_components, 0, pca=CLFs['pca'], scaler=CLFs['scaler'])[0]
+    X_eval = prepare_data(data, n_components, 0, pca=CLFs['pca'], scaler=CLFs['scaler'], columns=columns)[0]
     y_pred_mean = np.stack([CLFs['clfs'][i].predict_proba(X_eval) for i in range(n_models)]).mean(axis=0)
     y_pred_std = np.stack([CLFs['clfs'][i].predict_proba(X_eval) for i in range(n_models)]).std(axis=0)
     y_class = y_pred_mean.argmax(axis=1)
@@ -139,3 +141,36 @@ def predict(data, CLFs, save_path=None):
         data.to_csv(save_path + '.csv', index=False)
     
     return data
+
+
+def plot_confusion_matrix(data, normalize=True, save_path=None):
+    y_true = data[['bond_length', 'label']].explode('bond_length')['label'].apply(bond_to_float).values
+    y_pred = data['y_class'].sum()
+    
+    if normalize:
+        cm = confusion_matrix(y_true, y_pred, normalize='true')
+    else:
+        cm = confusion_matrix(y_true, y_pred)
+        
+    fig, ax = plt.subplots(figsize=(4.5,4.5))
+    ax.imshow(np.sqrt(cm), aspect='auto', cmap=cmap_mono)
+    
+    labels = [k.capitalize() for k in bonds.keys()]
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            if i == j: fc='white'
+            else: fc = cmap_mono(100)
+            if normalize:
+                ax.text(j,i, '{:.2}'.format(cm[i,j]), ha='center', va='center', color=fc)
+            else:
+                ax.text(j,i, cm[i,j], ha='center', va='center', color=fc)
+  
+    ax.set_xlabel('Predicted class')
+    ax.set_ylabel('True class')
+    if save_path:
+        fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
