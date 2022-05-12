@@ -1,18 +1,20 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils.class_weight import compute_sample_weight
-from sklearn.metrics import balanced_accuracy_score, confusion_matrix
+from sklearn.metrics import confusion_matrix
+
+from scipy.interpolate import interp1d
 
 from joblib import dump, load
 from tqdm import tqdm
 from utils.data import bonds, bond_to_float
-from utils.plot import palette, fontsize, textsize, cmap_mono
+from utils.plot import palette, palette_grad, fontsize, textsize, cmap_mono, cmap_grad
 
 bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
 tqdm.pandas(bar_format=bar_format)
@@ -55,34 +57,37 @@ def prepare_data(data, n_components, test_size, seed=12, pca=None, scaler=None, 
     return X_data, y_data, pca, scaler
 
 
-def train_models(X_data, y_data, pca, scaler, n_models=100, seed=12, save_path=None):
+def train_models(X_data, y_data, pca, scaler, n_models=100, seed=12, early_stopping=False, save_path=None):
     # compute sample weights
     X_train, X_test = X_data
     y_train, y_test = y_data
-    w_train = compute_sample_weight('balanced', y_train)
-    w_test = compute_sample_weight('balanced', y_test)
     dev_size = len(y_test)/(len(y_train) + len(y_test))
     
-    # N-fold stratified shuffle split
-    sss = StratifiedShuffleSplit(n_splits=n_models, test_size=dev_size, random_state=seed)
     clfs = [MLPClassifier(alpha=0.01, hidden_layer_sizes=(10,), activation='relu', max_iter=1000,
-                          batch_size=32, random_state=seed) for i in range(n_models)]
+                          batch_size=32, random_state=seed + i, n_iter_no_change=20, early_stopping=early_stopping,
+                          validation_fraction=dev_size) for i in range(n_models)]
     acc = {'train': np.zeros((n_models,)), 'dev': np.zeros((n_models,)), 'test': np.zeros((n_models,))}
-    acc_wt = {'train': np.zeros((n_models,)), 'dev': np.zeros((n_models,)), 'test': np.zeros((n_models,))}
+        
+    if early_stopping:
+        # train models and save scores
+        for i in tqdm(range(n_models), total=n_models, bar_format=bar_format):
+            clfs[i].fit(X_train, y_train)    
+            acc['train'][i] = clfs[i].score(X_train, y_train)
+            acc['dev'][i] = clfs[i].validation_scores_[-1]
+            acc['test'][i] = clfs[i].score(X_test, y_test)
+            
+    else:
+        # N-fold stratified shuffle split
+        sss = StratifiedShuffleSplit(n_splits=n_models, test_size=dev_size, random_state=seed)
+        
+        # train models and save scores
+        for i, (idx_train, idx_dev) in tqdm(enumerate(sss.split(X_train, y_train)), total=n_models, bar_format=bar_format):
+            clfs[i].fit(X_train[idx_train], y_train[idx_train])    
+            acc['train'][i] = clfs[i].score(X_train[idx_train], y_train[idx_train])
+            acc['dev'][i] = clfs[i].score(X_train[idx_dev], y_train[idx_dev])
+            acc['test'][i] = clfs[i].score(X_test, y_test)
     
-    # train models and save scores
-    for i, (idx_train, idx_dev) in tqdm(enumerate(sss.split(X_train, y_train)), total=n_models, bar_format=bar_format):
-        clfs[i].fit(X_train[idx_train], y_train[idx_train])    
-        acc['train'][i] = clfs[i].score(X_train[idx_train], y_train[idx_train])
-        acc['dev'][i] = clfs[i].score(X_train[idx_dev], y_train[idx_dev])
-        acc['test'][i] = clfs[i].score(X_test, y_test)
-        acc_wt['train'][i] = balanced_accuracy_score(y_train[idx_train], clfs[i].predict(X_train[idx_train]),
-                                                     sample_weight=w_train[idx_train])
-        acc_wt['dev'][i] = balanced_accuracy_score(y_train[idx_dev], clfs[i].predict(X_train[idx_dev]),
-                                                   sample_weight=w_train[idx_dev])
-        acc_wt['test'][i] = balanced_accuracy_score(y_test, clfs[i].predict(X_test), sample_weight=w_test)
-    
-    CLFs = {'clfs': clfs, 'acc': acc, 'acc_wt': acc_wt, 'pca': pca, 'scaler': scaler}
+    CLFs = {'clfs': clfs, 'acc': acc, 'pca': pca, 'scaler': scaler}
     
     if save_path:
         dump(CLFs, save_path + '.joblib')
@@ -157,9 +162,9 @@ def plot_confusion_matrix(data, normalize=True, save_path=None):
     
     labels = [k.capitalize() for k in bonds.keys()]
     ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels)
+    ax.set_xticklabels(labels, fontsize=textsize)
     ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels)
+    ax.set_yticklabels(labels, fontsize=textsize)
     
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
@@ -172,5 +177,133 @@ def plot_confusion_matrix(data, normalize=True, save_path=None):
   
     ax.set_xlabel('Predicted class')
     ax.set_ylabel('True class')
+    if save_path:
+        fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
+        
+        
+def loss_stats(clfs, valid=False):
+    n_models = len(clfs)
+    l = min([len(clfs[i].loss_curve_) for i in range(n_models)])
+    L = np.zeros((n_models, l))
+    for i in range(n_models):
+        if valid:
+            L[i,:] = interp1d(range(len(clfs[i].validation_scores_)), clfs[i].validation_scores_)(range(l))
+        else:
+            L[i,:] = interp1d(range(len(clfs[i].loss_curve_)), clfs[i].loss_curve_)(range(l))
+    L_mean = L.mean(axis=0)
+    L_std = L.std(axis=0)
+    return L_mean, L_std
+
+
+def loss_history(run_date, ns_components, columns_list=['', '_en'], sort=True, early_stopping=False, valid=False, save_path=None):
+    fig, ax = plt.subplots(1,2, figsize=(9,4.3), sharex=True, sharey=True)
+    norm = plt.Normalize(vmin=min(ns_components), vmax=max(ns_components))
+    if not early_stopping:
+        valid = False
+    for i, n_components in enumerate(ns_components):
+        for j, b in enumerate(columns_list):
+            model_path = 'models/clfs_' + run_date + '_pc' + str(n_components) + b
+            if sort:
+                model_path += '_srt'
+            if early_stopping:
+                model_path += '_es'
+                
+            CLFs = load(model_path + '.joblib')
+            L_mean, L_std = loss_stats(CLFs['clfs'], valid)
+            color = cmap_grad(norm(n_components))
+
+            if j:
+                ax[j].plot(range(len(L_mean)), L_mean, label=n_components, color=color)
+            else:
+                ax[j].plot(range(len(L_mean)), L_mean, ls='dashed', label=n_components, color=color)
+
+            ax[j].text(len(L_mean) + 30, 0.9*L_mean[-1], n_components, ha='center', va='center', fontsize=textsize, color=color)
+            ax[j].fill_between(range(len(L_mean)), L_mean - L_std, L_mean + L_std, lw=0, alpha=0.2, color=color)
+
+    ax[0].set_xlim(right=ax[0].get_xlim()[1] + 60)
+    ax[0].set_yscale('log') 
+    ax[1].set_yscale('log')
+    ax[0].set_ylabel('Loss')
+    ax[0].set_xlabel('Iterations')
+    ax[1].set_xlabel('Iterations')
+    fig.subplots_adjust(wspace=0.05)
+    
+    if save_path:
+        fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
+        
+
+def accuracy_stats(run_date, ns_components, n_models, columns_list=['', '_en'], sort=True, early_stopping=False, save_path=None):
+    fig, ax = plt.subplots(1,2, figsize=(9,4.3), sharey=True)
+    norm = plt.Normalize(vmin=min(ns_components), vmax=max(ns_components))
+    colors = [cmap_grad(norm(k)) for k in ns_components]
+    
+    for j, b in enumerate(columns_list):   
+        acc = np.zeros(n_models*len(ns_components))
+        
+        for i, n_components in enumerate(ns_components):
+            model_path = 'models/clfs_' + run_date + '_pc' + str(n_components) + b
+            if sort:
+                model_path += '_srt'
+            if early_stopping:
+                model_path += '_es'
+
+            CLFs = load(model_path + '.joblib')
+            acc[i*n_models:(i+1)*n_models] = CLFs['acc']['test']
+
+        df = pd.DataFrame({'PCs': np.repeat(ns_components, n_models), 'Accuracy': acc})
+        sns.stripplot(ax=ax[j], x="PCs", y="Accuracy", data=df, alpha=0.7, size=7, palette=colors)
+
+    ax[1].set_ylabel(None)
+    fig.subplots_adjust(wspace=0.05)
+    
+    if save_path:
+        fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)
+        
+        
+        
+def score_stats(run_date, ns_components, data, test_size, seed=12, columns_list=['', '_en'], sort=True, early_stopping=False, save_path=None):
+    fig, ax = plt.subplots(1,2, figsize=(9,4.3), sharey=True)
+    norm = plt.Normalize(vmin=min(ns_components), vmax=max(ns_components))
+    colors = [cmap_grad(norm(k)) for k in ns_components]
+    n_test = int(np.ceil(test_size*len(np.stack(data['elf'].sum()))))
+    
+    for j, b in enumerate(columns_list):   
+        if j:
+            columns = ['en_diff']
+        else:
+            columns = []
+            
+        score = np.zeros(n_test*len(ns_components))
+        corr = np.zeros(n_test*len(ns_components))
+        
+        for i, n_components in enumerate(ns_components):
+            model_path = 'models/clfs_' + run_date + '_pc' + str(n_components) + b
+            if sort:
+                model_path += '_srt'
+            if early_stopping:
+                model_path += '_es'
+
+            CLFs = load(model_path + '.joblib')
+            n_models = len(CLFs['clfs'])
+            X_data, y_data, _, _ = prepare_data(data, n_components, test_size, seed=seed, pca=CLFs['pca'],
+                                                scaler=CLFs['scaler'], columns=columns)
+            X = X_data[1]
+            y_true = y_data[1]
+            y_pred_mean = np.stack([CLFs['clfs'][i].predict_proba(X) for i in range(n_models)]).mean(axis=0)
+            y_pred_std = np.stack([CLFs['clfs'][i].predict_proba(X) for i in range(n_models)]).std(axis=0)
+            y_class = y_pred_mean.argmax(axis=1)
+            y_class_mean = y_pred_mean[np.arange(len(y_class)), y_class]
+
+            score[i*n_test:(i+1)*n_test] = y_class_mean
+            corr[i*n_test:(i+1)*n_test] = (y_class == y_true).astype(int)
+
+        df = pd.DataFrame({'PCs': np.repeat(ns_components, n_test), 'Avg. score': score, 'Correct': corr})
+        sns.stripplot(ax=ax[j], x="PCs", y="Avg. score", hue='Correct', data=df, alpha=0.7, size=7,
+                      palette={1: palette_grad[1], 0: palette[-1]})
+        ax[j].get_legend().remove()
+
+    ax[1].set_ylabel(None)
+    fig.subplots_adjust(wspace=0.05)
+    
     if save_path:
         fig.savefig(save_path + '.png', bbox_inches='tight', dpi=200)

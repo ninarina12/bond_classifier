@@ -11,4 +11,4 @@ dependencies:
   - tqdm=4.64.*
   - ase=3.22.*
   - networkx=2.8
-
+  - seaborn=0.11.*

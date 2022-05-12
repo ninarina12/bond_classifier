@@ -158,11 +158,11 @@ def plot_pca(z, data, bonds, axes=[0,1,2], save_path=None):
         k.set_yticks([])
     
     if labeled:
-        ax[0,0].set_xticklabels([k.capitalize() for k in bonds.keys()], fontsize=fontsize-2)
-    ax[0,0].set_title(y1_label, fontsize=fontsize)
-    ax[0,1].set_title(r'$Bond\ length\ (\AA)$', fontsize=fontsize)
-    ax[0,2].set_title(r'$ELF\ second\ moment\ (\AA^2)$', fontsize=fontsize)
-    ax[0,3].set_title(r'$Electroneg.\ difference$', fontsize=fontsize)
+        ax[0,0].set_xticklabels([k.capitalize() for k in bonds.keys()], fontsize=textsize-2)
+    ax[0,0].set_title(y1_label, fontsize=textsize)
+    ax[0,1].set_title(r'$Bond\ length\ (\AA)$', fontsize=textsize)
+    ax[0,2].set_title(r'$\langle x^2 \rangle\ (\AA^2)$', fontsize=textsize)
+    ax[0,3].set_title(r'$\Delta \chi$', fontsize=textsize)
 
     fig.subplots_adjust(hspace=0.2, wspace=0.1)
     
