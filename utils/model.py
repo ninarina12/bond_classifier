@@ -268,7 +268,7 @@ def score_stats(run_date, ns_components, data, test_size, seed=12, columns_list=
     n_test = int(np.ceil(test_size*len(np.stack(data['elf'].sum()))))
     
     for j, b in enumerate(columns_list):   
-        if j:
+        if 'en' in b:
             columns = ['en_diff']
         else:
             columns = []
