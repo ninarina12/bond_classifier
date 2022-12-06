@@ -293,6 +293,11 @@ class ELFNN:
         self.X_test = np.stack(self.bm.iloc[self.idx_test]['input' + t].values)
         self.y_test = self.bond_to_float(self.bm.iloc[self.idx_test]['label'].tolist())
         
+        _, counts = np.unique(self.y_bm, return_counts=True)
+        self.class_weight = counts.sum()/counts
+        self.class_weight /= self.class_weight.sum()
+        print('Class weights:', self.class_weight)
+        
     
     def kfold_split(self, n_splits, test_size):
         self.n_splits = n_splits
@@ -332,8 +337,10 @@ class ELFNN:
 
                 f_labeled[j,i] = len(clf[j][i].labeled_iter_[clf[j][i].labeled_iter_ > 0])/len(self.X_data)
                 n_iter[j,i] = clf[j][i].n_iter_
-                acc_bm[j,i] = clf[j][i].score(self.X_bm, self.y_bm)
-                acc_test[j,i] = clf[j][i].score(self.X_test, self.y_test)
+                acc_bm[j,i] = clf[j][i].base_estimator_.score(self.X_bm, self.y_bm,
+                                                              sample_weight=self.class_weight[self.y_bm])
+                acc_test[j,i] = clf[j][i].base_estimator_.score(self.X_test, self.y_test,
+                                                                sample_weight=self.class_weight[self.y_test])
         
         clf_stats = {'threshold': threshold,
                      'n_iter': n_iter,
@@ -347,6 +354,7 @@ class ELFNN:
                  'inputs': self.inputs,
                  'pca': self.pca,
                  'scaler': self.scaler,
+                 'class_weight': self.class_weight,
                  'clf_stats': clf_stats,
                  'clf': clf     
         }
