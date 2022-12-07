@@ -8,6 +8,7 @@ import cmcrameri.cm as cm
 from tqdm import tqdm
 from joblib import dump, load
 
+from ase import Atoms
 from ase.io import read as read_ase
 from ase.data import covalent_radii
 from ase.visualize.plot import plot_atoms
@@ -43,6 +44,7 @@ class ELFNN:
         self.cmap = cm.lapaz
         self.norm = plt.Normalize(vmin=0, vmax=3)
         self.seed = 12
+        self.trained = False
         
     
     ''' Data loading methods '''
@@ -50,63 +52,108 @@ class ELFNN:
         saved = load(model_path + '.joblib')
         for k, v in saved.items():
             setattr(self, k, v)
+        self.trained = True
     
     
-    def load_data(self, sort=True, structure=False, drop_duplicates=False):
+    def load_data(self, dirname='data/', sort=True, structure=False, additional=False, drop_duplicates=False):
         # load data
         self.structure = structure
-        self.data = self.load_unlabeled_data()
-        self.bm = self.load_labeled_data(structure=structure)
+        self.additional = additional
         
-        # sort profiles
-        self.sort = sort
-        if sort:
-            self.data = self.sort_by_cdf(self.data)
-            self.bm = self.sort_by_cdf(self.bm)
-        
-        # drop duplicates
-        self.drop = drop_duplicates
-        if drop_duplicates:
-            self.data = self.drop_duplicates(self.data)
-            self.bm = self.drop_duplicates(self.bm)
+        if self.trained:
+            data = self.load_batch_data(dirname, structure=structure, additional=additional)
+            
+            # sort profiles
+            if self.sort:
+                data = self.sort_by_cdf(data)
+            return data
+                
+        else:
+            self.data = self.load_all_data(additional=additional)
+            self.bm = self.load_batch_data(structure=structure, label=True, additional=additional)
+            
+            # sort profiles
+            self.sort = sort
+            if self.sort:
+                self.data = self.sort_by_cdf(self.data)
+                self.bm = self.sort_by_cdf(self.bm)
+
+            # drop duplicates
+            self.drop = drop_duplicates
+            if drop_duplicates:
+                self.data = self.drop_duplicates(self.data)
+                self.bm = self.drop_duplicates(self.bm)
     
     
-    def load_unlabeled_data(self, dirname='data/unlabeled/'):
-        # load unlabeled data
+    def load_all_data(self, dirname='data/unlabeled/', additional=False):
+        # load data aggregated into single .csv
         if dirname[-1] != '/':
             dirname += '/'
-            
-        features = pd.read_csv(dirname + 'allAdditional.csv', header=None, usecols=range(6),
-                               names=['r_src', 'r_dst', 'e_src', 'e_dst', 'g_src', 'g_dst'])
+        
+        # read ELF profiles
+        self.columns_elf = ['e_diff', 'edge_src', 'edge_dst', 'l']
         data = pd.read_csv(dirname + 'allElfProfs.csv', header=None, usecols=range(45),
-                           names=list(range(41)) + ['e_diff', 'edge_src', 'edge_dst', 'l'])
-        data = data.assign(elf=data[list(range(41))].apply(np.array, axis=1)).drop(list(range(41)), axis=1)
+                           names=list(range(41)) + self.columns_elf)
+        data = data.assign(elf=data[list(range(41))].apply(np.array, axis=1)).drop(list(range(41)), axis=1)        
         data['id'] = np.cumsum((np.diff(data.edge_src, prepend=1) < 0).astype(int)) - 1
-        data = pd.concat([features, data], axis=1)
+        self.columns_elf += ['elf']
+        
+        if additional:
+            # read additional features
+            self.columns_add = ['r_src', 'r_dst', 'e_src', 'e_dst', 'g_src', 'g_dst']
+            features = pd.read_csv(dirname + 'allAdditional.csv', header=None, usecols=range(6), names=self.columns_add)
+            
+            features['r_diff'] = features[['r_src', 'r_dst']].apply(
+                lambda x: -1 if (x.r_src < 0) or (x.r_dst < 0) else np.abs(x.r_src - x.r_dst), axis=1)
+            features['g_diff'] = features[['g_src', 'g_dst']].apply(lambda x: np.abs(x.g_src - x.g_dst), axis=1)
+            
+            data = pd.concat([features, data], axis=1)
+            self.columns_add += ['r_diff', 'g_diff']
+        else:
+            self.columns_add = []
+            
         return data
     
     
-    def load_labeled_data(self, dirname='data/labeled/', structure=False):
-        # load benchmark data
+    def load_batch_data(self, dirname='data/labeled/', structure=False, label=False, additional=False):
+        # load data batched into folders for each material
         if dirname[-1] != '/':
             dirname += '/'
             
         materials = next(os.walk(dirname))[1]
         data = pd.DataFrame({'formula': materials})
-        data['label'] = data['formula'].apply(lambda x: self.parse_label(x, dirname))
-        data['features'] = data['formula'].apply(lambda x: self.parse_additional(x, dirname))
-        data['data'] = data['formula'].apply(lambda x: self.parse_elf(x, dirname))
+        
+        # read ELF profile
+        data['data'] = data['formula'].apply(lambda x: self.parse_elf(x, dirname)) 
+        self.columns_elf = list(data.iloc[0]['data'].keys())
         
         if structure:
             # read structure
-            data['structure'] = data['formula'].apply(lambda x: read_ase(dirname + x + '/POSCAR')) 
+            data['structure'] = data['formula'].apply(lambda x: read_ase(dirname + x + '/POSCAR'))
+            
+        if label:
+            # read label
+            data['label'] = data['formula'].apply(lambda x: self.parse_label(x, dirname))
         
-        data['formula'] = data['formula'].apply(lambda x: x.split('_')[0])
-        data = pd.concat([data.drop(['features', 'data'], axis=1), data['features'].apply(pd.Series),
-                          data['data'].apply(pd.Series)], axis=1)
+        if additional:
+            # read additional features
+            data['features'] = data['formula'].apply(lambda x: self.parse_additional(x, dirname))
+            self.columns_add = list(data.iloc[0]['features'].keys())
+            data = pd.concat([data.drop(['features', 'data'], axis=1), data['features'].apply(pd.Series),
+                              data['data'].apply(pd.Series)], axis=1)
+            
+            data['r_diff'] = data[['r_src', 'r_dst']].apply(
+                lambda x: [-1 if (s < 0) or (d < 0) else np.abs(s - d) for (s,d) in zip(x.r_src, x.r_dst)], axis=1)
+            data['g_diff'] = data[['g_src', 'g_dst']].apply(
+                lambda x: [np.abs(s - d) for (s,d) in zip(x.g_src, x.g_dst)], axis=1)
+            self.columns_add += ['r_diff', 'g_diff']
+            
+        else:
+            self.columns_add = []
+            data = pd.concat([data.drop(['data'], axis=1), data['data'].apply(pd.Series)], axis=1)
+        
         data['id'] = range(len(data))
-        data = data.explode(column=['r_src', 'r_dst', 'e_src', 'e_dst', 'g_src', 'g_dst',
-                                    'elf', 'e_diff', 'edge_src', 'edge_dst', 'l']).reset_index(drop=True)
+        data = data.explode(column=self.columns_elf + self.columns_add).reset_index(drop=True)
         return data
     
 
@@ -165,7 +212,7 @@ class ELFNN:
     def drop_duplicates(self, data):
         # drop duplicate elf profiles within 6 decimals
         data['_'] = range(len(data))
-        dg = pd.concat([data[['_', 'id', 'e_diff', 'l']],
+        dg = pd.concat([data[['_', 'id', 'r_diff', 'g_diff', 'e_diff', 'l']],
                         data['elf'].apply(lambda x: np.trunc(x*1e6)).apply(pd.Series)], axis=1)
         index_list = dg.groupby(
             dg.columns.tolist()[1:], sort=False)['_'].apply(list).reset_index(name='idx')['idx'].tolist()
@@ -177,6 +224,30 @@ class ELFNN:
         data = data.drop(['_'], axis=1).reset_index(drop=True)
         return data
     
+    
+    def regroup(self, data, by=['id', 'formula'], columns=['y_class', 'y_class_mean', 'y_class_std']):
+        # by = columns shared among all bonds in a single material
+        # columns = columns to be grouped for a single material
+        d = data.copy()
+        if 'index_orig' in data.columns:
+            # expand out dropped duplicates
+            print('Note: _src and _dst columns not restored due to dropped duplicates ...')
+            d = d.explode('index_orig').sort_values('index_orig').reset_index(drop=True)
+            columns += ['r_diff', 'g_diff', 'elf', 'e_diff', 'l']
+        else:
+            columns += self.columns_add + self.columns_elf
+            
+        if 'structure' in by:
+            d['structure'] = d['structure'].apply(lambda x: str({k: v.tolist() for (k,v) in x.todict().items()}))
+            
+        d = d.groupby(by, as_index=False, sort=False)[columns].agg(list)
+        d = d.drop('id', axis=1)
+        
+        if 'structure' in by:
+            d['structure'] = d['structure'].apply(lambda x: Atoms.fromdict(eval(x)))
+            
+        return d
+
     
     def get_distances(self, column='elf'):
         # calculate minimal cosine, Euclidean, and Earth mover's distances between unlabeled and labeled data
