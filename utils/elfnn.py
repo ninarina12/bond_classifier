@@ -69,8 +69,9 @@ class ELFNN:
             return data
                 
         else:
-            self.data = self.load_all_data(additional=additional)
-            self.bm = self.load_batch_data(structure=structure, label=True, additional=additional)
+            #self.data = self.load_all_data('data/unlabeled/', additional=additional)
+            self.data = self.load_batch_data('data/unlabeled/', structure=structure, additional=additional)
+            self.bm = self.load_batch_data('data/labeled/', structure=structure, label=True, additional=additional)
             
             # sort profiles
             self.sort = sort
@@ -85,7 +86,7 @@ class ELFNN:
                 self.bm = self.drop_duplicates(self.bm)
     
     
-    def load_all_data(self, dirname='data/unlabeled/', additional=False):
+    def load_all_data(self, dirname, additional=False):
         # load data aggregated into single .csv
         if dirname[-1] != '/':
             dirname += '/'
@@ -115,7 +116,7 @@ class ELFNN:
         return data
     
     
-    def load_batch_data(self, dirname='data/labeled/', structure=False, label=False, additional=False):
+    def load_batch_data(self, dirname, structure=False, label=False, additional=False):
         # load data batched into folders for each material
         if dirname[-1] != '/':
             dirname += '/'
@@ -129,15 +130,18 @@ class ELFNN:
         
         if structure:
             # read structure
-            data['structure'] = data['formula'].apply(lambda x: read_ase(dirname + x + '/POSCAR'))
+            tqdm.pandas(desc='Parse structures', bar_format=bar_format)
+            data['structure'] = data['formula'].progress_apply(lambda x: read_ase(dirname + x + '/POSCAR'))
             
         if label:
             # read label
-            data['label'] = data['formula'].apply(lambda x: self.parse_label(x, dirname))
+            tqdm.pandas(desc='Parse labels', bar_format=bar_format)
+            data['label'] = data['formula'].progress_apply(lambda x: self.parse_label(x, dirname))
         
         if additional:
             # read additional features
-            data['features'] = data['formula'].apply(lambda x: self.parse_additional(x, dirname))
+            tqdm.pandas(desc='Parse additional', bar_format=bar_format)
+            data['features'] = data['formula'].progress_apply(lambda x: self.parse_additional(x, dirname))
             self.columns_add = list(data.iloc[0]['features'].keys())
             data = pd.concat([data.drop(['features', 'data'], axis=1), data['features'].apply(pd.Series),
                               data['data'].apply(pd.Series)], axis=1)
@@ -211,6 +215,7 @@ class ELFNN:
 
     def drop_duplicates(self, data):
         # drop duplicate elf profiles within 6 decimals
+        '''
         data['_'] = range(len(data))
         dg = pd.concat([data[['_', 'id', 'r_diff', 'g_diff', 'e_diff', 'l']],
                         data['elf'].apply(lambda x: np.trunc(x*1e6)).apply(pd.Series)], axis=1)
@@ -222,6 +227,10 @@ class ELFNN:
         
         data = data[~data['index_orig'].apply(pd.Series).duplicated()]
         data = data.drop(['_'], axis=1).reset_index(drop=True)
+        '''
+        dg = pd.concat([data[['id', 'r_diff', 'g_diff', 'e_diff', 'l']],
+                        data['elf'].apply(lambda x: np.trunc(x*1e6)).apply(pd.Series)], axis=1)
+        data = data[~dg.duplicated()].reset_index(drop=True)
         return data
     
     
@@ -381,8 +390,45 @@ class ELFNN:
                                  max_iter=max_iter, batch_size=batch_size, random_state=self.seed)
         
     
-    def train_clf(self):
-        pass
+    def train_clf(self, model_path='clf'):
+        acc_bm = np.zeros((self.n_splits,))
+        acc_train = np.zeros_like(acc_bm)
+        acc_test = np.zeros_like(acc_bm)
+        clf = [clone(self.clf) for i in range(self.n_splits)]
+
+        for i, (idx_train, idx_dev) in tqdm(enumerate(self.kfold.split(self.X_bm, self.y_bm)),
+                                            total=self.n_splits, bar_format=bar_format):
+            
+            X_train = self.X_bm[idx_train]
+            y_train = self.y_bm[idx_train]
+                
+            clf[i].fit(X_train, y_train)
+            acc_bm[i] = clf[i].score(self.X_bm, self.y_bm, sample_weight=self.class_weight[self.y_bm])
+            acc_train[i] = clf[i].score(X_train, y_train, sample_weight=self.class_weight[y_train])
+            acc_test[i] = clf[i].score(self.X_test, self.y_test, sample_weight=self.class_weight[self.y_test])
+        
+        clf_stats = {'acc_bm': acc_bm,
+                     'acc_train': acc_train,
+                     'acc_test': acc_test
+
+        }
+
+        saved = {'sort': self.sort,
+                 'inputs': self.inputs,
+                 'pca': self.pca,
+                 'scaler': self.scaler,
+                 'class_weight': self.class_weight,
+                 'clf_stats': clf_stats,
+                 'clf': clf     
+        }
+        
+        if self.sort:
+            saved['pca_orig'] = self.pca_orig
+            
+        self.clf_stats = clf_stats
+        self.clf = clf
+        self.trained = True
+        dump(saved, model_path + '.joblib')
     
         
     def self_train_clf(self, threshold=[0.4], max_iter=50, model_path='stc'):
@@ -435,6 +481,7 @@ class ELFNN:
             
         self.clf_stats = clf_stats
         self.clf = clf
+        self.trained = True
         dump(saved, model_path + '.joblib')
         
         
@@ -501,7 +548,8 @@ class ELFNN:
 
         fig, ax = plt.subplots(c,c+1, figsize=(2.5*c,2.4*c), sharex='col',
                                gridspec_kw={'width_ratios': [1]*c + [0.07]})
-        norm = mpl.colors.LogNorm(vmin=1, vmax=500)
+        h = np.histogram2d(z_data[:,0], z_data[:,1], bins=bins)[0]
+        norm = mpl.colors.LogNorm(vmin=1, vmax=10**np.ceil(np.log10(h.max())))
         lmax = -np.Inf
         lmin = np.Inf
         for i in range(c):
