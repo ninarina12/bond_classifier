@@ -439,6 +439,7 @@ class ELFNN:
         n_iter = np.zeros((len(threshold), self.n_splits))
         f_labeled = np.zeros_like(n_iter)
         acc_bm = np.zeros_like(n_iter)
+        acc_train = np.zeros_like(n_iter)
         acc_test = np.zeros_like(n_iter)
         clf = [[SelfTrainingClassifier(clone(self.clf), threshold=threshold[j], max_iter=max_iter)
                 for i in range(self.n_splits)] for j in range(len(threshold))]
@@ -456,6 +457,8 @@ class ELFNN:
                 n_iter[j,i] = clf[j][i].n_iter_
                 acc_bm[j,i] = clf[j][i].base_estimator_.score(self.X_bm, self.y_bm,
                                                               sample_weight=self.class_weight[self.y_bm])
+                acc_train[j,i] = clf[j][i].base_estimator_.score(self.X_bm[idx_train], self.y_bm[idx_train],
+                                                              sample_weight=self.class_weight[self.y_bm[idx_train]])
                 acc_test[j,i] = clf[j][i].base_estimator_.score(self.X_test, self.y_test,
                                                                 sample_weight=self.class_weight[self.y_test])
         
@@ -463,6 +466,7 @@ class ELFNN:
                      'n_iter': n_iter,
                      'f_labeled': f_labeled,
                      'acc_bm': acc_bm,
+                     'acc_train': acc_bm,
                      'acc_test': acc_test
 
         }
