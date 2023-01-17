@@ -350,7 +350,7 @@ class ELFNN:
         
             
     ''' Train/test split methods '''        
-    def stratified_split(self, test_size):
+    def stratified_split(self, test_size, y='label'):
         self.test_size = test_size        
         self.idx_train, self.idx_test = train_test_split(range(len(self.bm)),
                                                          test_size=test_size,
@@ -361,8 +361,11 @@ class ELFNN:
             
         # labeled training data
         self.X_bm = np.stack(self.bm.iloc[self.idx_train]['input' + t].values)
-        self.y_bm = self.bond_to_float(self.bm.iloc[self.idx_train]['label'].tolist())
-        
+        if y == 'label':
+            self.y_bm = self.bond_to_float(self.bm.iloc[self.idx_train]['label'].tolist())
+        else:
+            self.y_bm = np.array(self.bm.iloc[self.idx_train][y].tolist())
+            
         # unlabeled data
         self.X_data = np.stack(self.data['input' + t].values)
         self.y_data = [-1 for _ in range(len(self.data))]
@@ -371,7 +374,10 @@ class ELFNN:
         
         # labeled testing data
         self.X_test = np.stack(self.bm.iloc[self.idx_test]['input' + t].values)
-        self.y_test = self.bond_to_float(self.bm.iloc[self.idx_test]['label'].tolist())
+        if y == 'label':
+            self.y_test = self.bond_to_float(self.bm.iloc[self.idx_test]['label'].tolist())
+        else:
+            self.y_test = np.array(self.bm.iloc[self.idx_test][y].tolist())
         
         _, counts = np.unique(self.y_bm, return_counts=True)
         self.class_weight = counts.sum()/counts
@@ -487,10 +493,6 @@ class ELFNN:
         self.clf = clf
         self.trained = True
         dump(saved, model_path + '.joblib')
-        
-        
-    def label_spreading():
-        pass
         
     
     def predict(self, data, threshold=0):
