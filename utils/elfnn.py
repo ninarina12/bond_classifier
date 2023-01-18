@@ -760,3 +760,36 @@ class ELFNN:
         val = np.vstack([x, y])
         ker = gaussian_kde(val)
         return np.reshape(ker(pos).T, xx.shape)
+    
+    
+    def plot_threshold_stats(self):
+        threshold = self.clf_stats['threshold']
+        n_iter = self.clf_stats['n_iter']
+        f_labeled = self.clf_stats['f_labeled']
+        acc_train = self.clf_stats['acc_train']
+        acc_test = self.clf_stats['acc_test']
+
+        fig, ax1 = plt.subplots(figsize=(7,3))
+        ax2 = ax1.twinx()
+        ax1.errorbar(threshold, n_iter.mean(axis=-1), yerr=n_iter.std(axis=-1), color=elf.dmap(0))
+        ax1.scatter(threshold, n_iter.mean(axis=-1), color=elf.dmap(0))
+        ax2.errorbar(threshold, f_labeled.mean(axis=-1), yerr=f_labeled.std(axis=-1), color=elf.dmap(3))
+        ax2.scatter(threshold, f_labeled.mean(axis=-1), color=elf.dmap(3))
+        ax1.set_xlabel('Threshold')
+        ax1.set_ylabel('Number of iterations', color=elf.dmap(0))
+        ax2.set_ylabel('Fraction of samples labeled', color=elf.dmap(3), labelpad=16)
+        ax1.spines['left'].set_color(elf.dmap(0))
+        ax2.spines['right'].set_color(elf.dmap(3))
+        ax1.yaxis.label.set_color(elf.dmap(0))
+        ax2.yaxis.label.set_color(elf.dmap(3))
+        ax1.tick_params(axis='y', colors=elf.dmap(0))
+        ax2.tick_params(axis='y', colors=elf.dmap(3))
+
+        fig, ax = plt.subplots(figsize=(7,3))
+        ax.errorbar(threshold, acc_train.mean(axis=-1), yerr=acc_train.std(axis=-1), color=elf.dmap(0))
+        ax.scatter(threshold, acc_train.mean(axis=-1), color=elf.dmap(0), label='Train')
+        ax.errorbar(threshold, acc_test.mean(axis=-1), yerr=acc_test.std(axis=-1), color=elf.dmap(3))
+        ax.scatter(threshold, acc_test.mean(axis=-1), color=elf.dmap(3), label='Test')
+        ax.set_xlabel('Threshold')
+        ax.set_ylabel('Accuracy')
+        ax.legend(frameon=False)
