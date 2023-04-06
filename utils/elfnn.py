@@ -209,7 +209,13 @@ class ELFNN:
         data['v'] = data[['elf_cdf', 'elf_cdf_r']].apply(
             lambda x: 2*(x.elf_cdf.sum() >= x.elf_cdf_r.sum()) - 1 , axis=1) 
         data['elf_orig'] = data['elf'].copy()
+        data['elf_pdf_orig'] = data['elf_pdf'].copy()
+        data['elf_cdf_orig'] = data['elf_cdf'].copy()
         data['elf'] = data[['elf_orig', 'v']].apply(lambda x: x.elf_orig[::x.v], axis=1)
+        data['elf_pdf'] = data[['elf','l']].apply(lambda x: x.elf/(x.elf.sum()*x.l/len(x.elf)), axis=1)
+        data['elf_cdf'] = data[['elf_pdf','l']].apply(lambda x: x.l/len(x.elf_pdf)*np.cumsum(x.elf_pdf), axis=1)
+        data['elf_pdf_norm'] = data['elf'].apply(lambda x: x/x.sum())
+        data['elf_cdf_norm'] = data['elf_pdf_norm'].apply(lambda x: np.cumsum(x))
         return data
     
 
@@ -262,14 +268,14 @@ class ELFNN:
         # calculate minimal cosine, Euclidean, and Earth mover's distances between unlabeled and labeled data
         z_data = np.stack(self.data[column].values)
         z_bm = np.stack(self.bm[column].values)
-        cdf_bm = np.stack(self.bm.apply(lambda x: 0.5*((1 + x.v)*x.elf_cdf + (1 - x.v)*x.elf_cdf_r), axis=1).values)
+        cdf_bm = np.stack(self.bm.elf_cdf.values)
 
         _, self.data['d_cos'] = pairwise_distances_argmin_min(z_data, z_bm, metric='cosine')
         _, self.data['d_euc'] = pairwise_distances_argmin_min(z_data, z_bm, metric='euclidean')
 
         tqdm.pandas(desc='Compute EMD', bar_format=bar_format)
         self.data['d_emd'] = self.data.progress_apply(lambda x: np.abs(
-            0.5*((1 + x.v)*x.elf_cdf + (1 - x.v)*x.elf_cdf_r)[None,:] - cdf_bm).sum(axis=-1).min(axis=-1), axis=1)
+            x.elf_cdf[None,:] - cdf_bm).sum(axis=-1).min(axis=-1), axis=1)
     
     
     def isin(self, x, x_list):
@@ -288,33 +294,33 @@ class ELFNN:
     
     
     ''' Data transform methods '''
-    def pca_fit(self, ev=0.9995):
+    def pca_fit(self, column='elf', ev=0.9995):
         pca = PCA()
-        pca.fit(np.stack(self.data['elf'].values))
+        pca.fit(np.stack(self.data[column].values))
         n_components = np.argmin(np.abs(pca.explained_variance_ratio_.cumsum() - ev)) + 1
         
         self.pca = PCA(n_components=n_components)
-        self.pca.fit(np.stack(self.data['elf'].values))
+        self.pca.fit(np.stack(self.data[column].values))
         
-        self.data['z'] = self.data['elf'].apply(lambda x: self.pca.transform([x])[0])
-        self.bm['z'] = self.bm['elf'].apply(lambda x: self.pca.transform([x])[0])
+        self.data['z'] = self.data[column].apply(lambda x: self.pca.transform([x])[0])
+        self.bm['z'] = self.bm[column].apply(lambda x: self.pca.transform([x])[0])
             
         if self.sort:
             self.pca_orig = PCA(n_components=n_components)
-            self.pca_orig.fit(np.stack(self.data['elf_orig'].values))
-            self.data['z_orig'] = self.data['elf_orig'].apply(lambda x: self.pca_orig.transform([x])[0])
-            self.bm['z_orig'] = self.bm['elf_orig'].apply(lambda x: self.pca_orig.transform([x])[0])
+            self.pca_orig.fit(np.stack(self.data[column + '_orig'].values))
+            self.data['z_orig'] = self.data[column + '_orig'].apply(lambda x: self.pca_orig.transform([x])[0])
+            self.bm['z_orig'] = self.bm[column + '_orig'].apply(lambda x: self.pca_orig.transform([x])[0])
         
         
-    def pca_transform(self, data):
+    def pca_transform(self, data, column='elf'):
         if not hasattr(self, 'pca'):
             print('Fitting PCA using default parameters ...')
             self.pca_fit()
         
-        data['z'] = data['elf'].apply(lambda x: self.pca.transform([x])[0])
+        data['z'] = data[column].apply(lambda x: self.pca.transform([x])[0])
         
-        if hasattr(self, 'pca_orig'):
-            data['z_orig'] = data['elf_orig'].apply(lambda x: self.pca_orig.transform([x])[0])
+        if hasattr(self, column + '_orig'):
+            data['z_orig'] = data[column + '_orig'].apply(lambda x: self.pca_orig.transform([x])[0])
         return data
         
     
