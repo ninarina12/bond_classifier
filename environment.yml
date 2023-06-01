@@ -1,15 +1,16 @@
-name: mdh
+name: elf
 channels:
   - conda-forge
 dependencies:
-  - python=3.10.*
-  - numpy=1.22.*
-  - pandas=1.4.*
-  - matplotlib=3.5.*
-  - scikit-learn=1.0.*
-  - notebook=6.4.*
-  - tqdm=4.64.*
+  - python>=3.9
   - ase=3.22.*
-  - networkx=2.8
-  - seaborn=0.11.*
-  - cmcrameri=1.4
+  - cmcrameri=1.5
+  - ipywidgets=8.0.*
+  - joblib=1.2.*
+  - matplotlib=3.7.*
+  - notebook=6.5.*
+  - numpy=1.24.*
+  - pandas=2.0.*
+  - scikit-learn=1.2.*
+  - scipy=1.10.*
+  - tqdm=4.65.*
