@@ -12,6 +12,6 @@
 
 	> `conda activate elf`
 
-3. Run `jupyter notebook` and optionally open `process.ipynb` to process data by identifying mixed bonds.
+3. Run `jupyter notebook` and open `process.ipynb` to process data by identifying mixed bonds.
 
 4. Open `predict.ipynb` to make predictions using the trained models.
