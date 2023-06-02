@@ -371,7 +371,8 @@ class ELFModel(ELF):
         
         
     def scaler_transform(self, data):
-        data['inputs_scaled'] = data['inputs'].apply(lambda x: self.scaler.transform([x])[0])
+        x = self.get_columns(data, ['inputs'])
+        data['inputs_scaled'] = self.scaler.transform(x).tolist()
         return data
         
     
@@ -423,26 +424,54 @@ class ELFModel(ELF):
         return fig
         
     
-    def plot_projection(self, axes=[0,1], y=None, cmap=None, order=None):
+    def plot_projection(self, axes=[0,1], x=None, y=None, cmap=None, order=None):
+        try: len(x)
+        except: x = self.z
+
         try: len(order)
-        except: order = range(len(self.z))
+        except: order = np.arange(len(x))
 
         e1, e2 = axes
         try: len(y)
-        except: colors = [self.palette[0] for k in range(len(self.z))]
+        except: colors = [self.palette[0] for k in range(len(x))]
         else:
             norm = plt.Normalize(vmin=y.min(), vmax=y.max())
             cmap = cmap if cmap else self.cmap
             colors = cmap(norm(y[order]))
-            
+
         fig, ax = plt.subplots(figsize=(5,5))
         if hasattr(self, 'z_fit'):
             ax.scatter(self.z_fit[:,e1], self.z_fit[:,e2], color=self.bkg)
-        ax.scatter(self.z[order,e1], self.z[order,e2], ec='black', color=colors)
-        ax.axis('off');
+        ax.scatter(x[order,e1], x[order,e2], ec='black', color=colors)
+        ax.axis('off')
         return fig
     
-        
+    
+    def plot_projection_slices(self, x, y, axes=[0,1], cmap=None, order=False):
+        e1, e2 = axes
+        norm = plt.Normalize(vmin=min([k.min() for k in y]), vmax=max([k.max() for k in y]))
+        cmap = cmap if cmap else self.cmap
+
+        n = int(np.ceil(np.sqrt(len(x))))
+        fig, ax = plt.subplots(n,n, figsize=(3*n,3*n))
+        ax = ax.ravel()
+        for i in range(len(x)):
+            if hasattr(self, 'z_fit'):
+                ax[i].scatter(self.z_fit[:,e1], self.z_fit[:,e2], color=self.bkg, s=24)
+
+            if order: idx = np.argsort(y[i])
+            else: idx = np.arange(len(y[i]))
+
+            colors = cmap(norm(y[i][idx]))
+            ax[i].scatter(x[i][idx,e1], x[i][idx,e2], ec='black', color=colors, s=24)
+            ax[i].axis('off')
+
+        for j in range(i+1,n*n):
+            ax[j].remove()
+
+        return fig
+
+
     def plot_profiles(self, n=15, axes=[0,1], y=None, cmap=None, transform=None):
         e1, e2 = axes
         points = self.z[:,np.array([e1,e2])]
