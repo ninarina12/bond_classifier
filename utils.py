@@ -383,28 +383,17 @@ class ELFModel(ELF):
         return data
     
         
-    def clf_init(self, n_estimators, max_depth):
+    def clf_init(self, n_estimators, max_depth, max_samples):
         self.clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, max_features='sqrt',
-                                          max_samples=None, class_weight='balanced', random_state=self.seed)
+                                          max_samples=max_samples, bootstrap=True, oob_score=True,
+                                          class_weight='balanced', random_state=self.seed)
         
     
-    def clf_ensemble_init(self, n_estimators, max_depth, n_models):
-        self.clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, max_features='sqrt',
-                                          max_samples=None, class_weight='balanced', random_state=self.seed)
-        self.clf = [clone(self.clf) for i in range(n_models)]
-        
-    
-    def clf_ensemble_predict(self, data):
+    def clf_predict(self, data):
         column = self.pca.column
         x = self.get_columns(data, ['inputs_scaled'])
-        y_pred = np.stack([self.clf[i].predict_proba(x) for i in range(len(self.clf))])        
-        data[column + '_pred_mean'] = y_pred.mean(axis=0).tolist()
-        data[column + '_pred_std'] = y_pred.std(axis=0).tolist()
-        data[column + '_class'] = data[column + '_pred_mean'].apply(np.argmax)
-        data[column + '_class_mean'] = data[[column + '_pred_mean', column + '_class']].apply(
-            lambda x: x[column + '_pred_mean'][x[column + '_class']], axis=1)
-        data[column + '_class_std'] = data[[column + '_pred_std', column + '_class']].apply(
-            lambda x: x[column + '_pred_std'][x[column + '_class']], axis=1)
+        data[column + '_pred_proba'] = self.clf.predict_proba(x).tolist()
+        data[column + '_pred'] = self.clf.predict(x).tolist()
         return data
 
 
@@ -520,35 +509,28 @@ class ELFModel(ELF):
         return fig
     
     
-    def plot_scores(self, scores, columns, features, n_estimators, max_depth, vmin=None, vmax=None):
-        fig, ax = plt.subplots(len(max_depth), len(n_estimators), figsize=(2.6*len(n_estimators), 3.2*len(max_depth)),
-                               sharex=True, sharey=True)
+    def plot_scores(self, scores, columns, features, n_estimators, max_depth):
+        fig, ax = plt.subplots(len(columns), len(features), figsize=(3*len(features), 3*len(columns)),
+                           sharex=True, sharey=True)
         fig.subplots_adjust(wspace=0.05, hspace=0.05)
-        norm = plt.Normalize(vmin=vmin if vmin else scores.min(), vmax=vmax if vmax else scores.max())
-        
-        try: len(ax)
-        except:
-            ax.imshow(scores, cmap=self.cmap, norm=norm)
-            ax.set_xticks(range(len(features)))
-            ax.set_xticklabels(['+'.join(i) for i in features])
-            ax.set_yticks(range(len(columns)))
-            ax.set_yticklabels(['$z_{' + i.split('_')[0] + '}$' for i in columns])
-            for i in range(scores.shape[0]):
-                for j in range(scores.shape[1]):
-                    ax.text(j,i,'{:.3f}'.format(scores[i,j]), color='white',
-                                 ha='center', va='center', fontsize=fontsize-3)
-        else:
-            for m in range(len(n_estimators)):
-                for n in range(len(max_depth)):
-                    ax[n,m].imshow(scores[:,:,m,n], cmap=self.cmap, norm=norm)
-                    ax[n,m].set_xticks(range(len(features)))
-                    ax[n,m].set_xticklabels(['+'.join(i) for i in features])
-                    ax[n,m].set_yticks(range(len(columns)))
-                    ax[n,m].set_yticklabels(['$z_{' + i.split('_')[0] + '}$' for i in columns])
-                    for i in range(scores.shape[0]):
-                        for j in range(scores.shape[1]):
-                            ax[n,m].text(j,i,'{:.3f}'.format(scores[i,j,m,n]), color='white',
-                                         ha='center', va='center', fontsize=fontsize-3)
+        ax = ax.ravel()
+
+        y_max = scores.max()
+        k = 0
+        for i in range(len(columns)):
+            ax[k].set_ylabel('Score')
+            ax[k].text(0.9, 0.1, r'$' + '_{'.join(columns[i].split('_')) + '}$', ha='right', va='bottom',
+                       transform=ax[k].transAxes)
+            for j in range(len(features)):
+                ax[k].set_prop_cycle('color', list(self.cmap(np.linspace(0,0.75,len(max_depth)))))
+                ax[k].plot(n_estimators, scores[i,j], label=max_depth)
+                ax[k].axhline(y_max, color=self.palette[1], ls=':')
+                ax[k].locator_params('x', nbins=4)
+                ax[k].tick_params(direction='in')
+                if i == (len(columns) - 1):
+                    ax[k].set_xlabel('Estimators')
+                k += 1
+        ax[-1].legend(frameon=False, ncol=2, title='Max. depth', loc='lower center')
         return fig
         
         
