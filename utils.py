@@ -4,6 +4,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import time, os
 import cmcrameri.cm as cm
+import networkx as nx
 
 from tqdm import tqdm
 from joblib import dump, load
@@ -54,6 +55,7 @@ class ELF:
         
         self.dmap = mpl.colors.ListedColormap(self.palette)
         self.dmap_l = mpl.colors.ListedColormap(self.palette_l)
+        self.dmap_c = mpl.colors.LinearSegmentedColormap.from_list('dmap_c', self.palette)
         self.cmap = cm.lapaz
         self.norm = plt.Normalize(vmin=0, vmax=max(self.bonds.values()))
         
@@ -80,7 +82,8 @@ class ELFData(ELF):
         # load data batched into folders for each material
         if dirname[-1] != '/':
             dirname += '/'
-            
+        self.dirname = dirname
+        
         materials = next(os.walk(dirname))[1]
         data = pd.DataFrame({'formula': materials})
         
@@ -122,7 +125,9 @@ class ELFData(ELF):
     
     def load_processed(self, dirname='data/', structure=False):
         if dirname[-1] != '/':
-            dirname += '/'        
+            dirname += '/'
+        self.dirname = dirname
+        
         filename = '/processed/'.join(dirname.split('/')[:-1]) + '.csv'
         
         self.data = pd.read_csv(filename)
@@ -132,7 +137,7 @@ class ELFData(ELF):
         if structure:
         # read structure
             tqdm.pandas(desc='Parse structures', bar_format=self.bar_format)
-            self.data['structure'] = data['formula'].progress_apply(lambda x: read_ase(dirname + x + '/POSCAR'))
+            self.data['structure'] = self.data['formula'].progress_apply(lambda x: read_ase(dirname + str(x) + '/POSCAR'))
     
     
     def parse_label(self, x, dirname):
@@ -201,6 +206,47 @@ class ELFData(ELF):
         _, getattr(self, data)['d_' + column + '_' + metric[:3]] = pairwise_distances_argmin_min(x_data, x_ref, metric=metric)
     
     
+    def get_graph(self, nodes, edges):
+        G = nx.Graph()
+        G.add_nodes_from(k for k in nodes.items())
+        G.add_edges_from(edges)
+        return G
+
+
+    def get_mdhs(self, column, n_classes, threshold=0.5, formulas=None):       
+        columns = [column + '_pred_proba', column + '_pred', 'edge_src', 'edge_dst', 'specie_src', 'specie_dst']
+        try: len(formulas)
+        except:
+            mdh = self.data.groupby('formula', as_index=False)[columns].agg(list)
+        else:
+            mdh = self.data[self.data['formula'].apply(
+                lambda x: x in formulas)].groupby('formula', as_index=False)[columns].agg(list)
+
+        # threshold
+        mdh = mdh[mdh[column + '_pred_proba'].apply(np.stack).apply(
+            lambda x: np.all(x.max(axis=-1) >= threshold))].reset_index(drop=True)
+
+        # read structures
+        mdh['structure'] = mdh['formula'].apply(lambda x: read_ase(self.dirname + str(x) + '/POSCAR'))
+
+        # parse nodes and edges
+        mdh['nodes'] = mdh['structure'].apply(
+            lambda x: {k: {'symbol': x[k].symbol, 'number': x[k].number, 'radius': covalent_radii[x[k].number],
+                           'pos': x.get_positions()[k,:-1]} for k in range(len(x))})
+        mdh['edges'] = mdh[['edge_src', 'edge_dst', column + '_pred_proba', column + '_pred']].apply(
+            lambda x: [(i,j, {'class': k, 'score': s}) for (i,j,k,s) in
+                       zip(x.edge_src, x.edge_dst, x[column + '_pred'], x[column + '_pred_proba']) if k < (n_classes-1)], axis=1)
+
+        # get number of connected components
+        mdh['n_components'] = mdh[['nodes', 'edges']].apply(
+            lambda x: nx.number_connected_components(self.get_graph(x.nodes, x.edges)), axis=1)
+
+        # filter out mdhs
+        mdh = mdh[mdh['n_components'] > 1].reset_index(drop=True)
+        print('Number of candidate MDHs:', len(mdh))
+        return mdh
+
+
     def tag_mixed(self):
         mixed = [[] for k in range(len(self.data))]
 
@@ -275,25 +321,29 @@ class ELFData(ELF):
     
     def plot_structure(self, struct, rotation=('0x,0y,0z')):
         # plot crystal structure
-        Z = struct.get_atomic_numbers()
-        norm = plt.Normalize(vmin=Z.min(), vmax=Z.max())
+        numbers = struct.get_atomic_numbers()
+        symbols = Symbols(numbers)
+        usymbols = np.unique(symbols)
+        sym2num = dict(zip(usymbols, range(len(usymbols))))
+        norm = plt.Normalize(vmin=0, vmax=len(usymbols)-1)
 
         fig, ax = plt.subplots(figsize=(3,3))
-        plot_atoms(struct, ax, colors=self.dmap(norm(Z)), radii=0.3*covalent_radii[Z], rotation=rotation)
+        colors = [self.dmap_c(norm(sym2num[k])) for k in symbols]
+        plot_atoms(struct, ax, colors=colors, radii=0.3*covalent_radii[numbers], rotation=rotation)
         ax.set_xlabel('x $(\AA)$')
         ax.set_ylabel('y $(\AA)$')
 
-        Z = np.unique(Z)
-        S = Symbols(Z)
-        R = 0.3*covalent_radii[Z]
+        numbers = np.unique(numbers)
+        symbols = Symbols(numbers)
+        radii = 0.3*covalent_radii[numbers]
         x = ax.get_xlim()[1] + 1
         y = ax.get_ylim()[1]
         s = 0.8 if y > 8 else 0.4
         k = 0
-        for i, r in enumerate(R):
+        for i, r in enumerate(radii):
             k += r
-            ax.add_patch(plt.Circle((x, y - k), r, ec='black', fc=self.dmap(norm(Z[i])), clip_on=False))
-            ax.text(x + R.max() + 0.3, y - k, S[i], ha='left', va='center')
+            ax.add_patch(plt.Circle((x, y - k), r, ec='black', fc=self.dmap_c(norm(sym2num[symbols[i]])), clip_on=False))
+            ax.text(x + radii.max() + 0.3, y - k, symbols[i], ha='left', va='center')
             k += r + s
         return fig
     
@@ -303,7 +353,6 @@ class ELFModel(ELF):
     def __init__(self, n_classes=4):
         super().__init__(n_classes)
         self.seed = 12
-        np.random.seed(self.seed)
     
     
     def _adjacent_values(self, vals, q1, q3):
@@ -341,14 +390,16 @@ class ELFModel(ELF):
         self.inputs = inputs
         
     
-    def split(self, data, test_size=0.1, stratify=True):
-        idx_train, idx_test = train_test_split(range(len(data)), test_size=test_size, random_state=self.seed,
+    def split(self, data, test_size=0.1, stratify=True, seed=None):
+        idx_train, idx_test = train_test_split(range(len(data)), test_size=test_size,
+            random_state=seed if seed else self.seed,
             stratify=self.bond_to_float(data['label'].tolist()) if stratify else None)
         return idx_train, idx_test
 
     
-    def split_kfold(self, n_folds, valid_size):
-        return StratifiedShuffleSplit(n_splits=n_folds, test_size=valid_size, random_state=self.seed)
+    def split_kfold(self, n_folds, test_size, seed=None):
+        return StratifiedShuffleSplit(n_splits=n_folds, test_size=test_size,
+                                      random_state=seed if seed else self.seed)
     
     
     def pca_fit(self, data, n_components, column='elf'):
@@ -383,10 +434,10 @@ class ELFModel(ELF):
         return data
     
         
-    def clf_init(self, n_estimators, max_depth, max_samples):
+    def clf_init(self, n_estimators, max_depth, max_samples, seed=None):
         self.clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, max_features='sqrt',
                                           max_samples=max_samples, bootstrap=True, oob_score=True,
-                                          class_weight='balanced', random_state=self.seed)
+                                          class_weight='balanced', random_state=seed if seed else self.seed)
         
     
     def clf_predict(self, data):
