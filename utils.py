@@ -401,18 +401,26 @@ class ELFModel(ELF):
         return StratifiedShuffleSplit(n_splits=n_folds, test_size=test_size,
                                       random_state=seed if seed else self.seed)
     
-    
+
     def pca_fit(self, data, n_components, column='elf'):
-        self.pca = PCA(n_components=n_components)
-        self.pca.column = column
-        data['z_' + column] = list(self.pca.fit_transform(self.get_columns(data, columns=[column])))
-        self.z_fit = np.stack(data['z_' + column].values)
+        if not isinstance(column, list):
+            column = [column]
+        self.pca = []
+        self.z_fit = []
+        for _column in column:
+            self.pca.append(PCA(n_components=n_components))
+            self.pca[-1].column = _column
+            data['z_' + _column] = list(self.pca[-1].fit_transform(self.get_columns(data, columns=[_column])))
+            self.z_fit.append(np.stack(data['z_' + _column].values))
         return data
         
     
     def pca_transform(self, data):
-        data['z_' + self.pca.column] = list(self.pca.transform(self.get_columns(data, columns=[self.pca.column])))
-        self.z = np.stack(data['z_' + self.pca.column].values)
+        self.z = []
+        for i in range(len(self.pca)):
+            data['z_' + self.pca[i].column] = list(self.pca[i].transform(
+                self.get_columns(data, columns=[self.pca[i].column])))
+            self.z.append(np.stack(data['z_' + self.pca[i].column].values))
         return data
     
     
@@ -441,18 +449,23 @@ class ELFModel(ELF):
         
     
     def clf_predict(self, data):
-        column = self.pca.column
+        columns = [k.column for k in self.pca]
+        if len(columns[0].split('_')) > 1:
+            tag = '_' + columns[0].split('_')[-1]
+        else:
+            tag = ''
+        column = '_'.join([''.join(k.split('_')[:-1]) for k in columns]) + tag
         x = self.get_columns(data, ['inputs_scaled'])
         data[column + '_pred_proba'] = self.clf.predict_proba(x).tolist()
         data[column + '_pred'] = self.clf.predict(x).tolist()
         return data
 
 
-    def plot_evr(self, target=None):
-        evr = self.pca.explained_variance_ratio_.cumsum()
+    def plot_evr(self, target=None, index=0):
+        evr = self.pca[index].explained_variance_ratio_.cumsum()
 
         fig, ax = plt.subplots(figsize=(3.5,3))
-        ax.plot(range(1, self.pca.n_components + 1), evr, color=self.palette[0])
+        ax.plot(range(1, self.pca[index].n_components + 1), evr, color=self.palette[0])
         
         if target:
             n_evr = 1 + np.argmin(np.abs(evr - target))
@@ -464,9 +477,9 @@ class ELFModel(ELF):
         return fig
         
     
-    def plot_projection(self, axes=[0,1], x=None, y=None, cmap=None, order=None):
+    def plot_projection(self, axes=[0,1], x=None, y=None, cmap=None, order=None, index=0):
         try: len(x)
-        except: x = self.z
+        except: x = self.z[index]
 
         try: len(order)
         except: order = np.arange(len(x))
@@ -481,13 +494,13 @@ class ELFModel(ELF):
 
         fig, ax = plt.subplots(figsize=(5,5))
         if hasattr(self, 'z_fit'):
-            ax.scatter(self.z_fit[:,e1], self.z_fit[:,e2], color=self.bkg)
+            ax.scatter(self.z_fit[index][:,e1], self.z_fit[index][:,e2], color=self.bkg)
         ax.scatter(x[order,e1], x[order,e2], ec='black', color=colors)
         ax.axis('off')
         return fig
     
     
-    def plot_projection_slices(self, x, y, axes=[0,1], cmap=None, order=False):
+    def plot_projection_slices(self, x, y, axes=[0,1], cmap=None, order=False, index=0):
         e1, e2 = axes
         norm = plt.Normalize(vmin=min([k.min() for k in y]), vmax=max([k.max() for k in y]))
         cmap = cmap if cmap else self.cmap
@@ -497,8 +510,7 @@ class ELFModel(ELF):
         ax = ax.ravel()
         for i in range(len(x)):
             if hasattr(self, 'z_fit'):
-                ax[i].scatter(self.z_fit[:,e1], self.z_fit[:,e2], color=self.bkg, s=24)
-
+                ax[i].scatter(self.z_fit[index][:,e1], self.z_fit[index][:,e2], color=self.bkg, s=24)
             if order: idx = np.argsort(y[i])
             else: idx = np.arange(len(y[i]))
 
@@ -512,22 +524,24 @@ class ELFModel(ELF):
         return fig
 
 
-    def plot_profiles(self, n=15, axes=[0,1], y=None, cmap=None, transform=None):
+    def plot_profiles(self, n=15, axes=[0,1], y=None, cmap=None, transform=None, index=0):
         e1, e2 = axes
-        points = self.z[:,np.array([e1,e2])]
+        
+        points = self.z[index][:,np.array([e1,e2])]
         hull = Delaunay(points)
 
         v1 = np.linspace(hull.min_bound[0], hull.max_bound[0], n)
         v2 = np.linspace(hull.min_bound[1], hull.max_bound[1], n)[::-1]
         p1, p2 = np.meshgrid(v1, v2)
-        zz = self.z.mean(axis=0, keepdims=True)*np.ones((n**2, self.z.shape[-1]))
+        
+        zz = self.z[index].mean(axis=0, keepdims=True)*np.ones((n**2, self.z[index].shape[-1]))
         zz[:,e1] = p1.ravel()
         zz[:,e2] = p2.ravel()
 
         if transform == None:
-            x = self.pca.inverse_transform(zz)
+            x = self.pca[index].inverse_transform(zz)
         else:
-            _x = self.pca.inverse_transform(zz)
+            _x = self.pca[index].inverse_transform(zz)
             x = np.zeros_like(_x)
             l = range(len(_x[0,:]))
             for i in range(len(x)):
@@ -570,7 +584,7 @@ class ELFModel(ELF):
         k = 0
         for i in range(len(columns)):
             ax[k].set_ylabel('Score')
-            ax[k].text(0.9, 0.1, r'$' + '_{'.join(columns[i].split('_')) + '}$', ha='right', va='bottom',
+            ax[k].text(0.9, 0.1, ' + '.join(['$z_{' + k.split('_')[0] + '}$' for k in columns[i]]), ha='right', va='bottom',
                        transform=ax[k].transAxes)
             for j in range(len(features)):
                 ax[k].set_prop_cycle('color', list(self.cmap(np.linspace(0,0.75,len(max_depth)))))
@@ -587,7 +601,7 @@ class ELFModel(ELF):
         
     def plot_violins(self, scores, columns):
         scores_sorted = [sorted(scores[i]) for i in range(len(columns))]
-        fig, ax = plt.subplots(figsize=(5,2))
+        fig, ax = plt.subplots(figsize=(len(columns),2))
         violin = ax.violinplot(scores_sorted, showextrema=False);
         for v in violin['bodies']:
             v.set_facecolor(self.palette[0])
@@ -603,18 +617,18 @@ class ELFModel(ELF):
         ax.vlines(range(1,len(columns)+1), whiskers_min, whiskers_max, color='k', linestyle='-', lw=1)
 
         ax.set_xticks(range(1,len(columns)+1))
-        ax.set_xticklabels(['$z_{' + i.split('_')[0] + '}$' for i in columns])
+        ax.set_xticklabels([' + '.join(['$z_{' + k.split('_')[0] + '}$' for k in i]) for i in columns])
         return fig
 
 
     def plot_importances(self, importances, columns, features, vmin=None, vmax=None, cmap=cm.lapaz):
         n_components = importances.shape[-1] - len(features)
         components = ['$z^{' + str(k) + '}$' for k in range(n_components)]
-        fig, ax = plt.subplots(figsize=(7,2))
+        fig, ax = plt.subplots(figsize=(n_components/2.,2))
         sm = ax.imshow(importances, vmin=vmin, vmax=vmax, cmap=cmap)
         ax.set_xticks(range(importances.shape[-1]))
         ax.set_xticklabels(components + ['+'.join(i) for i in features])
         ax.set_yticks(range(len(columns)))
-        ax.set_yticklabels(['$z_{' + i.split('_')[0] + '}$' for i in columns])
+        ax.set_yticklabels([' + '.join(['$z_{' + k.split('_')[0] + '}$' for k in i]) for i in columns])
         plt.colorbar(sm, aspect=12)
         return fig
