@@ -26,7 +26,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.base import clone
 
-fontsize = 14
+fontsize = 12
 plt.rcParams['font.family'] = 'Lato'
 plt.rcParams['font.size'] = fontsize
 plt.rcParams['axes.linewidth'] = 1
@@ -56,7 +56,7 @@ class ELF:
         self.dmap = mpl.colors.ListedColormap(self.palette)
         self.dmap_l = mpl.colors.ListedColormap(self.palette_l)
         self.dmap_c = mpl.colors.LinearSegmentedColormap.from_list('dmap_c', self.palette)
-        self.cmap = cm.lapaz
+        self.cmap = cm.oslo
         self.norm = plt.Normalize(vmin=0, vmax=max(self.bonds.values()))
         
         self.bar_format = '{l_bar}{bar:10}{r_bar}{bar:-10b}'
@@ -223,8 +223,8 @@ class ELFData(ELF):
                 lambda x: x in formulas)].groupby('formula', as_index=False)[columns].agg(list)
 
         # threshold
-        mdh = mdh[mdh[column + '_pred_proba'].apply(np.stack).apply(
-            lambda x: np.all(x.max(axis=-1) >= threshold))].reset_index(drop=True)
+        mdh = mdh[mdh[column + '_pred_proba'].apply(np.array).apply(
+            lambda x: np.all(x >= threshold))].reset_index(drop=True)
 
         # read structures
         mdh['structure'] = mdh['formula'].apply(lambda x: read_ase(self.dirname + str(x) + '/POSCAR'))
@@ -456,8 +456,16 @@ class ELFModel(ELF):
             tag = ''
         column = '_'.join([''.join(k.split('_')[:-1]) for k in columns]) + tag
         x = self.get_columns(data, ['inputs_scaled'])
-        data[column + '_pred_proba'] = self.clf.predict_proba(x).tolist()
-        data[column + '_pred'] = self.clf.predict(x).tolist()
+        
+        preds = self.clf.predict(x)
+        data[column + '_pred'] = preds.tolist()
+        
+        _preds = np.zeros((self.clf.n_estimators, len(x)), dtype=int)
+        for j in range(self.clf.n_estimators):
+            _preds[j] = self.clf.estimators_[j].predict(x)
+        _probas = np.count_nonzero(_preds == preds, axis=0)/self.clf.n_estimators
+        data[column + '_pred_proba'] = _probas.tolist()
+        
         return data
 
 
@@ -477,7 +485,7 @@ class ELFModel(ELF):
         return fig
         
     
-    def plot_projection(self, axes=[0,1], x=None, y=None, cmap=None, order=None, index=0):
+    def plot_projection(self, axes=[0,1], x=None, y=None, cmap=None, order=None, index=0, ec='black', bkg=True):
         try: len(x)
         except: x = self.z[index]
 
@@ -493,9 +501,9 @@ class ELFModel(ELF):
             colors = cmap(norm(y[order]))
 
         fig, ax = plt.subplots(figsize=(5,5))
-        if hasattr(self, 'z_fit'):
+        if bkg and hasattr(self, 'z_fit'):
             ax.scatter(self.z_fit[index][:,e1], self.z_fit[index][:,e2], color=self.bkg)
-        ax.scatter(x[order,e1], x[order,e2], ec='black', color=colors)
+        ax.scatter(x[order,e1], x[order,e2], ec=ec, color=colors)
         ax.axis('off')
         return fig
     
@@ -574,27 +582,42 @@ class ELFModel(ELF):
         return fig
     
     
-    def plot_scores(self, scores, columns, features, n_estimators, max_depth):
-        fig, ax = plt.subplots(len(columns), len(features), figsize=(3*len(features), 3*len(columns)),
+    def plot_scores(self, scores, columns, features, n_estimators, max_depth, y_min=None, y_shift=0.07):
+        fig, ax = plt.subplots(len(columns), len(features), figsize=(2.5*len(features), 2.5*len(columns)),
                            sharex=True, sharey=True)
         fig.subplots_adjust(wspace=0.05, hspace=0.05)
         ax = ax.ravel()
+        all_columns = set(['elf_srt', 'pdf_srt', 'pdf-l_srt', 'cdf_srt', 'cdf-A_srt'])
 
         y_max = scores.max()
         k = 0
         for i in range(len(columns)):
-            ax[k].set_ylabel('Score')
-            ax[k].text(0.9, 0.1, ' + '.join(['$z_{' + k.split('_')[0] + '}$' for k in columns[i]]), ha='right', va='bottom',
-                       transform=ax[k].transAxes)
+            if len(columns[i]) == 5:
+                ax[k].text(0.1, 0.85, 'All', ha='left', va='top', transform=ax[k].transAxes)
+            elif len(columns[i]) == 4:
+                label = list(all_columns.difference(set(columns[i])))[0]
+                ax[k].text(0.1, 0.85, 'All - ' + label.split('_')[0].upper(), ha='left', va='top', transform=ax[k].transAxes)
+            else:
+                ax[k].text(0.1, 0.8, ' + '.join([k.split('_')[0].upper() for k in columns[i]]),
+                           ha='left', va='top', transform=ax[k].transAxes)
             for j in range(len(features)):
                 ax[k].set_prop_cycle('color', list(self.cmap(np.linspace(0,0.75,len(max_depth)))))
                 ax[k].plot(n_estimators, scores[i,j], label=max_depth)
+                ax[k].axhline(1., color='black', ls='--')
                 ax[k].axhline(y_max, color=self.palette[1], ls=':')
                 ax[k].locator_params('x', nbins=4)
                 ax[k].tick_params(direction='in')
-                if i == (len(columns) - 1):
-                    ax[k].set_xlabel('Estimators')
+                if y_min:
+                    ax[k].set_ylim(bottom=y_min)
+                if i == 0:
+                    tag = 'Baseline'
+                    if len(features[j]):
+                        tag += ' + '
+                    ax[k].set_title(tag + ' + '.join([k.upper() for k in features[j]]), fontsize=plt.rcParams['font.size'])
                 k += 1
+
+        fig.supxlabel('Estimators', fontsize=plt.rcParams['font.size'], y=y_shift)
+        fig.supylabel('Score', fontsize=plt.rcParams['font.size'], x=0.05)
         ax[-1].legend(frameon=False, ncol=2, title='Max. depth', loc='lower center')
         return fig
         
@@ -615,20 +638,42 @@ class ELFModel(ELF):
         ax.scatter(range(1,len(columns)+1), medians, marker='o', fc='white', ec='black', s=50, zorder=3)
         ax.vlines(range(1,len(columns)+1), q1, q3, color='k', linestyle='-', lw=5)
         ax.vlines(range(1,len(columns)+1), whiskers_min, whiskers_max, color='k', linestyle='-', lw=1)
-
+        
+        all_columns = set(['elf_srt', 'pdf_srt', 'pdf-l_srt', 'cdf_srt', 'cdf-A_srt'])
         ax.set_xticks(range(1,len(columns)+1))
-        ax.set_xticklabels([' + '.join(['$z_{' + k.split('_')[0] + '}$' for k in i]) for i in columns])
+        if len(columns[0]) == 5:
+            ax.set_xticklabels(['All'])
+        elif len(columns[0]) == 4:
+            xticklabels = ['All - ' + list(all_columns.difference(set(i)))[0].split('_')[0].upper() for i in columns]
+            ax.set_xticklabels(xticklabels)
+        else:
+            ax.set_xticklabels([' + '.join([k.split('_')[0].upper() for k in i]) for i in columns])
+        ax.set_ylim(top=1.)
+        ax.set_xlabel('Descriptor(s)')
+        ax.set_ylabel('Score')
         return fig
 
 
-    def plot_importances(self, importances, columns, features, vmin=None, vmax=None, cmap=cm.lapaz):
+    def plot_importances(self, importances, columns, features, vmin=None, vmax=None, cmap=cm.oslo, tag=''):
+        if len(tag):
+            label = tag.capitalize() + ' importance'
+        else:
+            label = 'Importance'
+        all_columns = set(['elf_srt', 'pdf_srt', 'pdf-l_srt', 'cdf_srt', 'cdf-A_srt'])
+        
         n_components = importances.shape[-1] - len(features)
-        components = ['$z^{' + str(k) + '}$' for k in range(n_components)]
-        fig, ax = plt.subplots(figsize=(n_components/2.,2))
+        components = ['$z_{' + str(k + 1) + '}$' for k in range(n_components)]
+        fig, ax = plt.subplots(figsize=(importances.shape[-1]/2.,2))
         sm = ax.imshow(importances, vmin=vmin, vmax=vmax, cmap=cmap)
         ax.set_xticks(range(importances.shape[-1]))
-        ax.set_xticklabels(components + ['+'.join(i) for i in features])
+        ax.set_xticklabels(components + ['+'.join(i.capitalize()) for i in features])
         ax.set_yticks(range(len(columns)))
-        ax.set_yticklabels([' + '.join(['$z_{' + k.split('_')[0] + '}$' for k in i]) for i in columns])
-        plt.colorbar(sm, aspect=12)
+        if len(columns[0]) == 5:
+            ax.set_yticklabels(['All'])
+        elif len(columns[0]) == 4:
+            yticklabels = ['All - ' + list(all_columns.difference(set(i)))[0].split('_')[0].upper() for i in columns]
+            ax.set_yticklabels(yticklabels)    
+        else:
+            ax.set_yticklabels([' + '.join([k.split('_')[0].upper() for k in i]) for i in columns])
+        plt.colorbar(sm, aspect=16, label=label)
         return fig
